@@ -1,0 +1,84 @@
+name: Auto Increment Patch Version
+
+on:
+  schedule:
+    # 3日ごとに実行（0 0 */3 * *は3日ごとの午前0時に実行）
+    - cron: '0 0 */3 * *'
+  # 手動実行用のトリガー
+  workflow_dispatch:
+
+jobs:
+  increment-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+      - name: Find and increment patch version
+        run: |
+          # プロジェクトファイルの検索
+          PROJECT_FILES=$(find . -name "*.pbxproj")
+          
+          for FILE in $PROJECT_FILES; do
+            echo "Processing file: $FILE"
+            
+            # バックアップを作成
+            cp "$FILE" "${FILE}.bak"
+            
+            # MARKETING_VERSIONを持つ行を検索して処理
+            while IFS= read -r LINE_NUMBER; do
+              LINE=$(sed -n "${LINE_NUMBER}p" "$FILE")
+              
+              if [[ $LINE =~ MARKETING_VERSION[[:space:]]*=[[:space:]]*([0-9]+)\.([0-9]+)\.([0-9]+)\; ]]; then
+                # X.Y.Z形式のバージョン
+                MAJOR="${BASH_REMATCH[1]}"
+                MINOR="${BASH_REMATCH[2]}"
+                PATCH="${BASH_REMATCH[3]}"
+                
+                # パッチバージョンをインクリメント
+                NEW_PATCH=$((PATCH + 1))
+                NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+                
+                # 置換
+                sed -i "${LINE_NUMBER}s/MARKETING_VERSION[[:space:]]*=[[:space:]]*[0-9]\+\.[0-9]\+\.[0-9]\+/MARKETING_VERSION = $NEW_VERSION/" "$FILE"
+                echo "Updated version $MAJOR.$MINOR.$PATCH -> $NEW_VERSION in $FILE at line $LINE_NUMBER"
+              
+              elif [[ $LINE =~ MARKETING_VERSION[[:space:]]*=[[:space:]]*([0-9]+)\.([0-9]+)\; ]]; then
+                # X.Y形式のバージョン
+                MAJOR="${BASH_REMATCH[1]}"
+                MINOR="${BASH_REMATCH[2]}"
+                
+                # マイナーバージョンをインクリメント（X.Y形式の場合はマイナーバージョンを上げる）
+                NEW_MINOR=$((MINOR + 1))
+                NEW_VERSION="$MAJOR.$NEW_MINOR"
+                
+                # 置換
+                sed -i "${LINE_NUMBER}s/MARKETING_VERSION[[:space:]]*=[[:space:]]*[0-9]\+\.[0-9]\+/MARKETING_VERSION = $NEW_VERSION/" "$FILE"
+                echo "Updated version $MAJOR.$MINOR -> $NEW_VERSION in $FILE at line $LINE_NUMBER"
+              fi
+              
+            done < <(grep -n "MARKETING_VERSION" "$FILE" | cut -d: -f1)
+          done
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push if there are changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git add .
+          git commit -m "chore: Increment patch version [automated]"
+          git push
